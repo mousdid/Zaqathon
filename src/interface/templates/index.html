@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Order Processing System</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Email Order Processing System</h1>
+            <p>Upload an email to process product orders and validate against the catalog</p>
+        </div>
+        
+        {% if get_flashed_messages() %}
+        <ul class="flash-messages">
+            {% for message in get_flashed_messages() %}
+            <li class="flash-message">{{ message }}</li>
+            {% endfor %}
+        </ul>
+        {% endif %}
+        
+        <form action="/" method="post" enctype="multipart/form-data">
+            <div class="upload-container" id="upload-area">
+                <div class="upload-icon">📄</div>
+                <div class="upload-text">Drag & Drop Email File (.txt) or Click to Browse</div>
+                <input type="file" name="email_file" id="email-file" class="upload-input" accept=".txt">
+                <button type="button" class="upload-button" id="browse-button">Browse Files</button>
+            </div>
+            <button type="submit" id="submit-button" style="display: none;">Process Email</button>
+        </form>
+        
+        <div class="results-container">
+            <h2 class="results-header">Processing Results</h2>
+            
+            {% if result %}
+            <div class="results-content">
+                <div>
+                    <span class="status-badge {% if result.success %}status-success{% else %}status-error{% endif %}">
+                        {% if result.success %}Order Validated{% else %}Order Has Issues{% endif %}
+                    </span>
+                </div>
+                
+                <div class="summary-box">
+                    <h3>Order Summary</h3>
+                    <p>Total products requested: {{ result.summary.total_products_requested }}</p>
+                    <p>Products found: {{ result.summary.products_found }}</p>
+                    <p>Products missing: {{ result.summary.products_missing }}</p>
+                    <p>Total price: ${{ "%.2f"|format(result.summary.total_price) }}</p>
+                    <p>Has delivery information: {{ "Yes" if result.summary.has_delivery_info else "No" }}</p>
+                </div>
+                
+                <div class="tab-container">
+                    <div class="tab active" data-tab="order">Order Details</div>
+                    <div class="tab" data-tab="validation">Validation Results</div>
+                </div>
+                
+                <div class="tab-content active" id="order-tab">
+                    <div class="json-container">{{ result.order }}</div>
+                </div>
+                
+                <div class="tab-content" id="validation-tab">
+                    <div class="json-container">{{ result.validation }}</div>
+                </div>
+            </div>
+            {% else %}
+            <p>Upload an email file to see processing results.</p>
+            {% endif %}
+        </div>
+    </div>
+    
+    <script>
+        // Handle file upload UI interactions
+        const uploadArea = document.getElementById('upload-area');
+        const fileInput = document.getElementById('email-file');
+        const browseButton = document.getElementById('browse-button');
+        const submitButton = document.getElementById('submit-button');
+        
+        // Handle browse button click
+        browseButton.addEventListener('click', () => {
+            fileInput.click();
+        });
+        
+        // Handle drag & drop
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.style.backgroundColor = 'rgba(255, 255, 255, 0.3)';
+        });
+        
+        uploadArea.addEventListener('dragleave', () => {
+            uploadArea.style.backgroundColor = 'rgba(255, 255, 255, 0.1)';
+        });
+        
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadArea.style.backgroundColor = 'rgba(255, 255, 255, 0.1)';
+            
+            if (e.dataTransfer.files.length) {
+                fileInput.files = e.dataTransfer.files;
+                updateFileDisplay();
+            }
+        });
+        
+        // Handle file selection
+        fileInput.addEventListener('change', updateFileDisplay);
+        
+        function updateFileDisplay() {
+            if (fileInput.files.length) {
+                const fileName = fileInput.files[0].name;
+                document.querySelector('.upload-text').textContent = `Selected file: ${fileName}`;
+                submitButton.style.display = 'block';
+                submitButton.style.margin = '15px auto 0';
+            }
+        }
+        
+        // Tab switching functionality
+        const tabs = document.querySelectorAll('.tab');
+        tabs.forEach(tab => {
+            tab.addEventListener('click', () => {
+                // Remove active class from all tabs
+                tabs.forEach(t => t.classList.remove('active'));
+                
+                // Add active class to clicked tab
+                tab.classList.add('active');
+                
+                // Hide all tab contents
+                document.querySelectorAll('.tab-content').forEach(content => {
+                    content.classList.remove('active');
+                });
+                
+                // Show the selected tab content
+                const tabName = tab.getAttribute('data-tab');
+                document.getElementById(`${tabName}-tab`).classList.add('active');
+            });
+        });
+    </script>
+</body>
+</html>
