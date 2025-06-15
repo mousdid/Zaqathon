@@ -2,7 +2,6 @@ import json
 from typing import Dict, List, Optional, Any
 
 from src.utils.data_loader import load_product_catalog, create_product_lookup
-from src.utils.prompt_template import get_product_verification_prompt
 from src.utils.config import get_llm, generate_completion
 
 
@@ -17,15 +16,16 @@ class LookupAgent:
         
         Args:
             catalog_path: Path to the product catalog CSV file
-            temperature: LLM temperature setting
-            model: LLM model to use
+            temperature: LLM temperature setting for insight generation
+            model: LLM model to use for insight generation
         """
         # Load the product catalog
         self.catalog_df = load_product_catalog(catalog_path)
         self.product_lookup = create_product_lookup(self.catalog_df)
         
-        # Initialize the LLM
-        self.llm = get_llm(temperature=temperature, model=model)
+        # Initialize LLM parameters
+        self.temperature = temperature
+        self.model = model
     
     def verify_products(self, order_info: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -46,37 +46,11 @@ class LookupAgent:
                 "insights": "No products found in the order."
             }
         
-        # Prepare catalog info for the prompt
-        catalog_sample = self.catalog_df.head(5).to_string()
-        catalog_info = f"Sample of catalog (showing 5 products):\n{catalog_sample}\n\nTotal products in catalog: {len(self.catalog_df)}"
-        
-        # Generate verification prompt
-        prompt = get_product_verification_prompt(products, catalog_info)
-        
-        # Get the LLM response
-        response = generate_completion(self.llm, prompt)
-        
-        # Parse the JSON response
-        try:
-            verification_results = json.loads(response)
-            return verification_results
-        except json.JSONDecodeError:
-            # If the response isn't valid JSON, try to extract it
-            json_start = response.find('{')
-            json_end = response.rfind('}') + 1
-            if json_start >= 0 and json_end > json_start:
-                try:
-                    verification_results = json.loads(response[json_start:json_end])
-                    return verification_results
-                except:
-                    pass
-            
-            # Manual verification as fallback
-            return self._manual_product_verification(products)
+        return self._manual_product_verification(products)
     
     def _manual_product_verification(self, products: List[Dict]) -> Dict[str, Any]:
         """
-        Manually verify products against the catalog without using LLM.
+        Manually verify products against the catalog.
         
         Args:
             products: List of product dictionaries
@@ -89,28 +63,33 @@ class LookupAgent:
         total_price = 0
         
         for product in products:
-            sku = product.get('sku')
+            product_name = product.get('name')
             quantity = product.get('quantity', 1)
             
-            if sku in self.product_lookup:
-                product_info = self.product_lookup[sku]
-                price = product_info.get('price', 0)
-                available = product_info.get('availability', 0)
-                min_order = product_info.get('min_order_quantity', 1)
+            # Check if the product exists in the Product_Name column (partial match)
+            matching_products = self.catalog_df[self.catalog_df["Product_Name"].str.contains(product_name, case=False, na=False)]
+            
+            if not matching_products.empty:
+                product_details = matching_products.iloc[0]
+                available_in_stock = product_details["Available_in_Stock"]
+                price = product_details["Price"]
+                min_order_quantity = product_details["Min_Order_Quantity"]
                 
                 verified_products.append({
-                    "sku": sku,
+                    "name": product_name,
                     "found_in_catalog": True,
-                    "quantity": quantity,
-                    "quantity_available": available,
-                    "minimum_order_quantity": min_order,
-                    "quantity_valid": quantity >= min_order and quantity <= available,
-                    "price": price
+                    "quantity_requested": quantity,
+                    "quantity_available": available_in_stock,
+                    "minimum_order_quantity": min_order_quantity,
+                    "quantity_valid": quantity >= min_order_quantity and quantity <= available_in_stock,
+                    "price": price,
+                    "product_code": product_details["Product_Code"],
+                    "description": product_details["Description"]
                 })
                 
                 total_price += price * quantity
             else:
-                missing_products.append(sku)
+                missing_products.append(product_name)
         
         return {
             "verified_products": verified_products,
@@ -120,7 +99,7 @@ class LookupAgent:
         }
     
     def _generate_manual_insights(self, verified_products, missing_products, total_price):
-        """Generate basic insights without using LLM."""
+        """Generate basic insights."""
         insights = []
         
         if missing_products:
@@ -137,7 +116,7 @@ class LookupAgent:
         
         return "\n".join(insights)
     
-    def generate_extended_insights(self, verification_results: Dict[str, Any]) -> str:
+    def generate_extended_insights(self, validation_results: Dict[str, Any]) -> str:
         """
         Generate additional insights about the order using LLM.
         
@@ -147,21 +126,28 @@ class LookupAgent:
         Returns:
             String with extended insights
         """
-        # Create a prompt for the LLM to generate insights
-        prompt = f"""
-        Analyze the following order verification results and provide business insights:
-        
-        {json.dumps(verification_results, indent=2)}
-        
-        Provide insights on:
-        1. Order completeness and any issues
-        2. Inventory implications
-        3. Customer service recommendations
-        4. Business value of this order
-        
-        Format your response as a concise bullet-point list.
-        """
-        
-        # Get insights from LLM
-        insights = generate_completion(self.llm, prompt)
-        return insights
+        try:
+            # Get the LLM client
+            llm = get_llm(temperature=self.temperature, model=self.model)
+            
+            # Create a prompt for the LLM to generate insights
+            prompt = f"""
+            Analyze the following order verification results and provide business insights:
+            
+            {json.dumps(validation_results, indent=2)}
+            
+            Provide insights on:
+            1. Order completeness and any issues
+            2. Inventory implications
+            3. Customer service recommendations
+            4. Business value of this order
+            
+            Format your response as a concise bullet-point list with action items for each category.
+            """
+            
+            # Get insights from LLM
+            insights = generate_completion(llm, prompt)
+            return insights
+        except Exception as e:
+            # If LLM fails, provide basic insights
+            return f"Extended insights generation failed: {str(e)}\n\nBasic insights:\n{validation_results.get('insights', '')}"
